@@ -1,0 +1,318 @@
+\documentclass[headinclude=false]{scrartcl}
+%\usepackage[swedish]{babel}
+
+% Fonts
+\usepackage[utf8]{inputenc}
+\usepackage[full]{textcomp} % to get the right copyright, etc.
+\usepackage{fbb} % so math uses tabular lining figures
+\usepackage[scaled=.97]{cabin} % sans serif in style of Gill Sans
+\usepackage[zerostyle=c,scaled=.95]{newtxtt}
+\usepackage[T1]{fontenc}
+\usepackage[garamondx,bigdelims]{newtxmath}
+\usepackage[cal=boondoxo,bb=boondox,frak=boondox]{mathalfa}
+\usepackage[italic]{mathastext}
+\useosf
+
+% Floats and figures
+\usepackage{float}
+\usepackage{caption}
+%\usepackage{graphicx}
+
+% Tables and lists
+\usepackage{enumitem}
+\usepackage{tabu}
+\usepackage{booktabs}
+
+% Title page
+\usepackage{abstract}
+\usepackage{authblk}
+
+% Headers
+\usepackage{scrlayer-scrpage}
+\pagestyle{scrheadings}
+\lohead[]{Larsson}
+\rohead[]{MEVM04: Imputing missing data}
+
+% Hyperref setup
+\usepackage[dvipsnames,svgnames,x11names,hyperref]{xcolor}
+\usepackage[hyphens]{url}
+\usepackage{hyperref}
+\hypersetup{linkcolor=DodgerBlue4,citecolor=DodgerBlue4,urlcolor=DodgerBlue4,colorlinks = true}
+
+% tikz
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,decorations.text}
+\usepackage{standalone}
+
+\title{Imputing missing data}
+\subtitle{MEVM04}
+\author{Johan Larsson}
+%\author[1]{Johan Larsson\thanks{johanlarsson@outlook.com; corresponding author.}
+%\affil[1]{}
+
+%\renewcommand\Affilfont{\itshape\small}
+%\renewcommand{\sectfont}{\rmfamily\bfseries} 
+
+\begin{document}
+<<include=FALSE>>=
+library(lattice)
+library(latticeExtra)
+library(extrafont)
+
+trellis.par.set(list(custom.theme.2(),
+                     grid.pars=list(fontfamily="Cabin"),
+                     layout.heights=list(strip=1.45),
+                     regions=list(col=(colorRampPalette(brewer.pal(11, "RdBu"))(100)))))
+
+myStrip <- strip.custom(bg="black",
+                        par.strip.text = list(trellis.par.get(),
+                                              col = "white",
+                                              cex = 0.8,
+                                              font = 1))
+
+myStripStyle <- function(which.panel, factor.levels, ...) {
+  panel.rect(0, -0.08, 1, 1,
+             col = "black",
+             border = 1)
+  panel.text(x = 0.5, y = 0.5,
+             font=1,
+             lab = factor.levels[which.panel],
+             col = "white")
+}
+@
+
+\maketitle
+
+\section{Introduction}
+
+Missing values are common in clinical research and can occur for many reasons.
+Crudely, they can be separated into missing values on the predictor(s) ($x$, also
+known as \emph{independent variables}) and on the outcome(s) ($y$, also
+known as \emph{dependent variables}). 
+
+In the first case, missing data might occur because a participant did not wish
+to disclose information on their weight (here, a predictor); in the second case,
+observations might be missing because the blood pressure gauge had malfunctioned
+when the participant's blood pressure was measured. Whether a value is missing
+on $x$ or $y$ affect our ability to 1) do something about it, and 2) the
+consequences for our results. In this text, we will deal with each
+instance of missing values in turn.
+
+A common choice when data is missing is \emph{case deletion}: deleting each observation
+for which a value is missing, which is also known as doing a complete cases
+analysis. Many common statistical models, analysis of variance for instance,
+requires complete cases to work properly, whilst some, such as tree-based models,
+do not~\cite{Kuhn_2013}; such models, however, are beyond the scope of this
+text. Whilst it is frequent, case deletion is generally bad practice since it
+can lead to unpredictable bias~\cite{knol_unpredictable_2010} and inefficiency~\cite{carpenterjames_multiple_2013}.
+
+A better alternative to case deletion is \emph{imputation}, which is when
+you fill in (impute) missing values based on information
+given by other variables. In its simplest form, missing data on a person's
+weight might be substituted with the mean weight of the entire group (though as
+we shall see there are much better options available).
+
+This text is an assignment for a class in my master's programme: \emph{MEVN04},
+wherein I have attempted to outline the basics of missing data with a focus on
+how to handle missing valued on predictor variables using imputation. The text 
+is based heavily on books by Steyerberg \cite{steyerberg_clinical_2009} and 
+Harrell \cite{Harrell_2015}; as a final step, I have provied a worked-through 
+example given in the latter book.
+
+As a secondary objective, this text is an attempt of reproducible research using
+\emph{knitR} for \emph{R} (R Core Team). All of the files used to produce this
+text (including plots and statistical analyses) will therefore be provided
+publicly on Github at
+\href{https://github.com/Hjalt/mevn04imput}{https://github.com/Hjalt/mevn04imput}.
+
+\section{Types of missing data}
+
+Apart from whether predictor or outcome variables are missing, there are 
+three types of missing data:
+
+\begin{description}[style=multiline,leftmargin=8ex]
+  \item[MCAR] Missing Completely At Random
+  \item[MAR] Missing At Random
+  \item[MNAR] Missing Not At Random
+\end{description}
+
+MCAR means that there is no pattern to why the data is missing; perhaps the 
+scale had malfunctioned and weight data had to be discarded. When data is MAR
+there is conversely a pattern to its absence, although that pattern is apparent
+from the data -- younger people might for example have refused to be weighed more
+frequently (and we recorded age). Lastly,
+when data is MNAR there is a pattern that cannot be deciphered from
+the available data. Perhaps people of lower income did not want to step up on
+the scale but we did not measure income. MNAR is a particularly problematic form
+since it is by definition impossible to understand if and how it might be
+affecting the results.
+
+\section{Missing data on independent variables}
+
+The situation where data is missing on predictors deserves most
+attention as it is both common and manageable, whilst being detrimental to our
+results (if not taken care of).
+
+In \autoref{fig:matrix} various scenarios of missing predictor values
+have been simulated from a simple linear model \[y=x1+x2+\text{error}\]
+
+Here, $x1$, $x2$, and the error term are generated from a normal distribution
+with a mean of 0, and a standard deviation of 1, 1, and 0.1 respectively. Thus,
+the true slope of the relationship is $r=1$, which can be seen from the first
+panel. This example has been adapted and revised from the code excerpts from
+Steyerberg \cite{steyerberg_clinical_2009}.
+
+\begin{figure}[t]
+\centering
+<<matrix,echo=FALSE,warning=FALSE,fig.width=5.8,fig.height=3.4,dev='cairo_pdf'>>=
+source("scatterplot.R")
+trellis.par.set(fontsize = list(text = 8, points = 6))
+plot
+@
+\caption{Different types of missing data and their effects on the correlation coefficient. $x1$ and $x2$ are normally distributed. The true correlation coefficients (r) are 1. Only when data is MAR on $y$ is the correlation coefficient noticably erroneous. This example has been adapted from Steyerberg \cite{steyerberg_clinical_2009}}
+\label{fig:matrix}
+\end{figure}
+
+When data is MCAR on $x1$, the foremost consequence is that we lose
+statistical power. If for instance every other participant had one variable 
+missing out of 5, this would mean that half of the sample was dropped from the
+analysis, even though only 10\% of the data was missing. As we see on the
+slope, however, data that is MCAR does not actually affect the estimate, simply
+because it is random and not systematic missingness.
+
+In the third panel, $x1$ is missing for lower levels of $x2$, which is a case of
+MAR. Here, too, is the slope unbiased (but would not be if the relationship was
+different for lower, compared with higher, values of $x2$.
+
+In the fourth panel, $x1$ is missing for higher levels of $y$ -- also a case of
+MAR. We can see here that the slope estimate is biased low ($r=0.73$ for $x1$
+and $r=0.76$ for $x2$).
+
+Finally, in the fifth panel, $x1$ is missing for higher values of $x1$ -- a 
+pattern that cannot be deduced from the data. This is an instance of MNAR. 
+The slope is unbiased in this instance, which is related to missingness of $x1$
+being related to $x1$ itself. If there was a third variable in the mix,
+to which $x1$ owed its missingness, the results would be different.
+
+\section{Single imputation}
+
+\subsection{Simple mean imputation}
+
+A simple, but flawed, option is to replace missing values with the mean of the
+variable, which is suboptimal because it fails to take advantage of patterns in
+the data, i.e., correlations between variables that otherwise can improve the
+accuracy of imputations. Moreover, it underestimates the variance (the
+randomness) of the estimates, which leads to overconfidence in the estimates.
+
+Better options exist in \emph{conditional mean imputation}, 
+\emph{stochastic regression imputation}, and \emph{multiple imputation}.
+
+\subsection{Conditional mean imputation}
+
+In conditional mean imputation (or regression imputation), missing data on a
+variable are imputed using the patters of how the variable correlates with
+other variables. As with simple mean imputation, however, conditional mean
+imputation underestimates the variance of the imputations; if, for example,
+we were to impute missing values in \autoref{fig:matrix} with conditional
+mean imputation, all those values would lie along the imputation slope and this
+would not reflect the true nature of variance.
+
+\subsection{Stochastic regression imputation}
+
+Stochastic regression imputation alleviates the issue of underestimated variance
+by randomly sampling from the distribution of predicted values, that is, the
+distribution that in conditional mean imputation would have been used to 
+compute the mean, whereby it simulates the random error that is inherent to
+all real measurements.
+
+\section{Multiple imputation}
+
+Though single imputation techniques are efficient and sometimes adequate, they 
+present one drawback in that the randomness inherent to
+the imputation step itself is not explicitly covered in the analysis. The 
+simplest way of looking at this is to consider that only after we are done
+imputing do we conduct our analysis \ref{fig:simput}, which means that any
+bias we introduce with our imputation model is disregarded -- this poses a
+serious problem for the external validity of our model.
+
+\begin{figure}
+\tikzstyle{sphere} = [circle, text badly centered, inner sep=1ex, text width = 15ex, draw]
+\tikzstyle{empty} = [rectangle, inner sep=3ex]
+\tikzstyle{line} = [draw, -latex']
+
+\centering
+\small
+\begin{tikzpicture}[node distance=3cm, auto]
+\node[empty](analysis){Analysis};
+
+\node[sphere, below of = analysis](impset){Imputed data set};
+\node[empty, left of = impset](emptynode){};
+\node[sphere, left of = emptynode](firstset){Data set with missing values};
+
+\path[line, dashed](analysis) -- (impset);
+\path[line](firstset) -- node [] {Imputation} (impset);
+
+\end{tikzpicture}
+\caption{Flow chart of single imputation models.}
+\label{fig:simput}
+\end{figure}
+
+This issue is solved with \emph{multiple imputation}, a statistical technique
+that was designed by Rubin \cite{rubin_multiple_2004} as a flexible
+method for dealing with missing data. In multiple imputation, several data sets
+are produced by random sampling from the original data set. In each of these
+sets an imputation model is fit (as in conditional mean imputation) and a
+estimate is esablished as an aggregate of all of these data sets. Because we
+are then including the variance of imputation in the aggregate, we directly
+take bias from the imputation step into account.
+
+\subsection{Chained equations}
+
+If data is missing on several variables, it might be necessary to impute in
+steps, which is known as chained equations multiple imputation. It works by
+first imputing data on one variable, then creating a new sample from the
+original data plus the imputations, and thereafter reapeating the imputation
+step. This iterative process can proceed for as long as desired, but most
+software use a stopping-rule to drop out of the loop at some preestablished
+point.
+
+\begin{figure}[t]
+\centering
+\input{tikz-multimp.tex}
+\caption{Flow chart of multiple imputation model with chained equations. The
+entire situation is only visualized for \emph{Set 1}.}
+\label{fig:mimput}
+\end{figure}
+
+\section{Missing data on dependent variable}
+
+Observations with missing data on the dependent variable (outcome) are commonly
+excluded from the analysis. And if they are MCAR, there is an argument to do so
+since no additional information can be gathered from the remaining data if
+the variable of interest is missing \cite{Harrell_2015}.
+
+Yet, when data on $Y$ is MAR, bias might occur. Harrell recommends that
+researchers should as a minimum characterize any patterns of missingness, and
+simulation studies show that there are benefits to imputation also on $y$~\cite{hippel_4_2007}.
+
+\section{Issues with imputation}
+
+In imputation we assume that data is MAR, i.e. we are able to figure out from
+the rest of the variables why data is missing. However, this assumption is by
+definition not testable \cite{grahamjohnw._missing_2012}
+(but becomes increasingly tenable as more variables are measured).
+
+If the assumption does not hold and data is instead MNAR then
+imputation can only lead to increased bias, and it would be advisable to stick
+to case deletion. However, as many empirical as well
+as simulation experiments have shown, imputation generally leads to less bias
+and more efficiency with relatively little bias.
+
+\section{A worked-through example}
+
+<<test, child='problem.Rnw'>>=
+@
+  
+\bibliographystyle{vancouver}
+\bibliography{C:/Users/johan/OneDrive/Bibliography/library}
+\end{document}

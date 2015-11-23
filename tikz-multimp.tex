@@ -1,0 +1,55 @@
+\documentclass{standalone}
+
+\usepackage[utf8]{inputenc}
+\usepackage[full]{textcomp} % to get the right copyright, etc.
+\usepackage{fbb} % so math uses tabular lining figures
+\usepackage[scaled=.97]{cabin} % sans serif in style of Gill Sans
+\usepackage[zerostyle=c]{newtxtt}
+\usepackage[T1]{fontenc}
+\usepackage[garamondx,bigdelims]{newtxmath}
+\usepackage[cal=boondoxo,bb=boondox,frak=boondox]{mathalfa}
+\usepackage[italic]{mathastext}
+\useosf
+
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,decorations.text}
+
+\begin{document}
+\tikzstyle{decision} = [circle, draw,text width = 8ex]%
+\tikzstyle{square} = [rectangle, draw, inner sep = 1ex]%
+\tikzstyle{line} = [draw, -stealth']%
+\begin{tikzpicture}[text badly centered, node distance = 25ex, auto]
+\footnotesize
+\node[decision](start){Original dataset};
+\node[decision](set1) at (54:25ex){Set 1};
+\node[decision](set2) at (18:25ex){Set 2};
+\node[decision](set3)  at (342:25ex) {Set 3};
+\node[decision](setn)  at (306:25ex) {$\dots n$};
+\node[square, right of = start, node distance = 75ex,text width=12ex](analysis){Averaged estimate};
+
+\node[decision, right of=set1](set1imp){};
+\node[decision, right of=set2](set2imp){};
+\node[decision, right of=set3](set3imp){};
+\node[decision, right of=setn](setnimp){};
+
+\path[line](start) -- node [sloped,above]{\tiny{Random sampling}} (set1);
+\path[line](start) -- (set2);
+\path[line](start) -- (set3);
+\path[line](start) -- (setn);
+
+\draw[line](set1) -- node{\tiny{Imputation}} (set1imp);
+\path[line](set2) -- (set2imp);
+\path[line](set3) -- (set3imp);
+\path[line](setn) -- (setnimp);
+
+\def\myshift#1{\raisebox{1ex}}
+\draw[-latex' reversed,dashed,postaction={decorate,decoration={text along path,text align=center,text={|\tiny\myshift|New imputation}}}] (set1.north) to [bend left=90] node{}(set1imp.north);
+\def\myshift#1{\raisebox{1ex}}
+
+\draw[line] (set1imp.east) to [bend left] node{}(analysis.north);
+\draw[line] (set2imp.east) to [out=0, in=180] node{} (analysis.west);
+\draw[line] (set3imp.east) to [out=0, in=180] node{}(analysis.west);
+\draw[line] (setnimp.east) to [out=0, in=270] node{} (analysis.south); 
+
+\end{tikzpicture}
+\end{document}

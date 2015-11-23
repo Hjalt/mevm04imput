@@ -1,0 +1,204 @@
+<<include=FALSE>>=
+library(extrafont)
+opts_chunk$set(warning=FALSE,message=FALSE,dev="cairo_pdf",dev.args=list(pointsize=8,family="Cabin"),fig.width=5,fig.height=5,fig.align="center")
+options(width = 65)
+@
+
+\subsection{Explore the variables and patterns of missing data in the SUPPORT
+dataset.}
+\subsubsection{Print univariable summaries of all variables. Make a plot (showing all
+variables on one page) that describes especially the continuous variables.}
+
+We start with some descriptive variables
+
+<<>>=
+library(Hmisc)
+
+# Load the SUPPORT data set.
+getHdata(support)
+
+# Total proportion of missing values
+sum(sapply(support, is.na))/length(sapply(support, is.na))
+
+# Print some summary statistics of every variable
+describe(support)
+@
+
+To make a plot, we first drop the categorical variables from the data set, then
+we compute a correlation matrix, reorganize it with a factor
+analysis and then plot it using the facilities of \texttt{levelplot} in
+lattice.
+
+<<>>=
+# Subset the support data set to remove categorical variables
+support.cont <- support[, sapply(support, is.numeric)]
+support.cont <- support.cont[, -(2:3)]
+
+# Print a scatterplot matrix
+library(psych)
+library(lattice)
+library(latticeExtra)
+
+m <- mat.sort(as.matrix(cor(support.cont,
+                            use = "pairwise.complete.obs")))
+
+levelplot(m,
+          scales = list(x = list(rot = 90)),
+          at = seq(-1, 1, length.out = 100))
+@
+
+\subsection{Make a plot showing the extent of missing data and tendencies for some
+variables to be missing on the same patients.}
+
+We use Harrel's \texttt{Hmisc} package to plot the relationships of
+missingness between variables.
+
+<<>>=
+library(Hmisc)
+naplot(naclus(support), which = "all")
+@
+
+\subsection{Total hospital costs (variable totcst) were estimated from 
+hospitalspecific Medicare cost-to-charge ratios. Characterize what kind of
+patients have missing totcst. For this characterization use the following
+patient descriptors: age, sex, dzgroup, num.co, edu, income, scoma,
+meanbp, hrt, resp, temp.}
+
+We can solve this by plotting distributions of the various variables involved.
+
+<<>>=
+library(dplyr) # For data wrangling
+support.na <- support[is.na(support$totcst), ] %>%
+ select(age, sex, dzgroup, num.co, edu,
+        income, scoma, meanbp, hrt, resp, temp)
+trellis.par.set(fontsize = list(text = 8, points = 6))
+marginal.plot(support.na)
+@
+
+\subsection{Prepare for later development of a model to predict costs by developing
+reliable imputations for missing costs. Remove the observation having zero
+totcst.}
+
+We start by removing values for which the outcome (\texttt{totcst}) is missing
+or zero.
+
+<<>>=
+support.complete <- subset(support, !is.na(totcst) & totcst > 0)
+@
+
+\subsubsection{The cost estimates are not available on 105 patients. Total hospital
+charges (bills) are available on all but 25 patients. Relate these two
+variables to each other with an eye toward using charges to predict
+totcst when totcst is missing. Make graphs that will tell whether linear
+regression or linear regression after taking logs of both variables is
+better.}
+
+<<>>=
+# As suggested, we use a log transformation
+support.complete$totcst.log <- log(support.complete$totcst) 
+support.complete$charges.log <- log(support.complete$charges)
+
+xyplot(totcst.log ~ charges.log, support.complete,
+       panel = function(...) {
+         panel.xyplot(...)
+         panel.smoother(..., span = 0.9)
+})
+@
+
+\subsubsection{Impute missing total hospital costs in SUPPORT based on a regression
+model relating charges to costs, when charges are available.}
+
+We need to specify an imputation model, which means we need to find the slope
+and intercept of the regression model
+
+<<>>=
+support.lm <- lm(totcst.log ~ charges.log, support.complete)
+i <- coefficients(support.lm)[1] # intercept
+b <- coefficients(support.lm)[2] # slope
+
+# Impute values
+support.tf <- transform(support,
+                        totcst = ifelse(is.na(totcst), 
+                                 (exp(i + b * log(charges))),
+                                 totcst))
+@
+
+\subsubsection{Compute the likely error in approximating total cost using charges by
+computing the median absolute difference between predicted and observed
+total costs in the patients having both variables available. If you
+used a log transformation, also compute the median absolute percent
+error in imputing total costs by anti-logging the absolute difference in
+predicted logs.}
+
+We start in reverse with the mmedian absolute percent error:
+
+<<>>=
+a <- support.complete[complete.cases(support.complete$charges),
+                      "totcst.log"]
+b <- predict(support.lm)
+exp(mad(a - b)) # The exponential of the natural logarithm
+@
+
+Next, the median absolute deviation:
+
+<<>>=
+a <- support.complete[complete.cases(support.complete$charges),
+                      "totcst"]
+b <- exp(predict(support.lm))
+mad(a - b) # In absolutes
+@
+
+\subsection{State briefly why single conditional median imputation 
+is OK here.}
+
+<<>>=
+lm.cc <- lm(totcst ~ charges, support.complete)
+lm.im <- lm(totcst ~ charges, support.tf)
+@
+
+Although we have quite a large proportion of missing values (14\%), we are
+introducing very little bias since our median absolute percent error is only 
+1.18\%. Simply put: because all observed outcomes lie close to the
+predicted ones, the bias we get from assuming that our missing values are on
+the slope is neglible.
+
+\subsection{Use transcan to develop single imputations for total cost, commenting on
+the strength of the model fitted by transcan as well as how strongly each
+variable can be predicted from all the others.}
+
+I decided to pick only some of the variables.
+
+<<results="hide">>=
+support.trans <- transcan(~ sex + age + totcst + death, data = support, 
+                          imputed = T, transformed=TRUE)
+@
+<<>>=
+summary(support.trans)
+@
+
+\texttt{totcst} can be imputed beneficially by \texttt{sex} and \texttt{age} but
+not by \texttt{death}.
+
+\subsection{Use predictive mean matching to multiply impute cost 10 times per missing
+observation. Describe graphically the distributions of imputed values and
+briefly compare these to distributions of non-imputed values. State in a simple 
+way what the sample variance of multiple imputations for a single
+observation of a continuous predictor is approximating.}
+
+We use the \texttt{aregImpute} function here.
+
+<<>>=
+support.aregImp <- aregImpute(~ age + sex + slos +
+                                num.co + totcst + charges,
+                              data = support,
+                              type = "pmm",
+                              n.impute = 10)
+
+support.aregImp
+@
+
+The sample variance of multiple imputations is approximating the measurement
+error that comes from the imputation itself. Since we are fitting an imputation
+model to the data, our imputed values are also following the random error of
+those fits; with multiple imputations, we can estimate that bias, which in turn
+will yield estimates that are less biased that those from single imputations.
